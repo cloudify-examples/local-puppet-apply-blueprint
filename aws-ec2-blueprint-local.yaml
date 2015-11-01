@@ -1,0 +1,232 @@
+tosca_definitions_version: cloudify_dsl_1_2
+
+imports:
+  - http://www.getcloudify.org/spec/cloudify/3.2/types.yaml
+  - http://www.getcloudify.org/spec/aws-plugin/1.2/plugin.yaml
+  - http://www.getcloudify.org/spec/fabric-plugin/1.2/plugin.yaml
+  - types/local/aws.yaml
+
+inputs:
+
+  ###### Cloudify Stuff
+
+  install_agent:
+    description: >
+      Set to false for a local workflow.
+    default: false
+
+  ###### Puppet Stuff
+
+  ## Puppet Agents
+
+  agent_ssh_agent_user:
+    description: >
+      The SSH user for the Puppet Agents.
+
+  puppet_agent_keypair:
+    description: >
+      The AWS name of the key in the local_agent_key_path.
+
+  puppet_agent_keypair_path:
+    description: >
+      The local path to an ssh key.
+
+  ## Puppet Servers
+
+  server_ssh_agent_user:
+    description: >
+      The SSH user for the Puppet Server.
+
+  puppet_server_keypair_path:
+    description: >
+      The local path to an ssh key.
+
+  puppet_server_ip:
+    description: >
+      The IP of the puppet server.
+
+  puppet_server_security_group:
+    description: >
+      The Puppet Security group.
+
+  ###### AWS Stuff
+
+  aws_access_key_id:
+    type: string
+
+  aws_secret_access_key:
+    type: string
+
+  ec2_region_name:
+    type: string
+
+  image_id:
+    description: >
+      The Cloud Provider Image ID.
+
+  instance_type: 
+    description: >
+      The Cloud Provider instance_type/size/flavor.
+
+dsl_definitions:
+
+  provider_configurations:
+    aws_config: &AWS_CONFIG
+      aws_access_key_id: { get_input: aws_access_key_id }
+      aws_secret_access_key: { get_input: aws_secret_access_key }
+      ec2_region_name: { get_input: ec2_region_name }
+
+  fabric_envs:
+    puppet_server_fabric_env: &PUPPET_SERVER_FABRIC
+      host_string: { get_input: puppet_server_ip }
+      user: { get_input: server_ssh_agent_user }
+      key_filename: { get_input: puppet_server_keypair_path }
+    nodejs_fabric_env: &NODEJS_HOST_FABRIC
+      user: { get_input: agent_ssh_agent_user }
+      host_string: { get_attribute: [ nodejs_host, public_ip_address ] }
+      key_filename: { get_property: [ puppet_agent_keypair, private_key_path ] }
+    mongodb_fabric_env: &MONGODB_HOST_FABRIC
+      user: { get_input: agent_ssh_agent_user }
+      host_string: { get_attribute: [ mongodb_host, public_ip_address ] }
+      key_filename: { get_property: [ puppet_agent_keypair, private_key_path ] }
+
+node_templates:
+
+  external_puppet_server:
+    type: puppet.nodes.ExternalServer
+    properties:
+      fabric_env: *PUPPET_SERVER_FABRIC
+      security_group: { get_input: puppet_server_security_group }
+
+  nodejs_agent:
+    type: puppet.nodes.Agent
+    properties:
+      node_definition_file: resources/puppet/nodejs_host.pp
+    relationships:
+      - type: puppet.relationships.agent_connected_to_server
+        target: external_puppet_server
+        source_interfaces:
+          cloudify.interfaces.relationship_lifecycle:
+            preconfigure:
+              inputs:
+                fabric_env: *NODEJS_HOST_FABRIC
+      - type: cloudify.relationships.contained_in
+        target: nodejs_host
+      - type: cloudify.relationships.connected_to
+        target: mongodb_host
+        source_interfaces:
+          cloudify.interfaces.relationship_lifecycle:
+            postconfigure:
+              implementation: fabric.fabric_plugin.tasks.run_script
+              inputs:
+                script_path: scripts/puppet/set-mongo-ip.sh
+                fabric_env: *NODEJS_HOST_FABRIC
+      - type: cloudify.relationships.depends_on
+        target: mongodb_agent
+    interfaces:
+      cloudify.interfaces.lifecycle:
+        create:
+          inputs:
+            fabric_env: *NODEJS_HOST_FABRIC
+        start:
+          inputs:
+            fabric_env: *NODEJS_HOST_FABRIC
+
+  mongodb_agent:
+    type: puppet.nodes.Agent
+    properties:
+      node_definition_file: resources/puppet/mongodb_host.pp
+    relationships:
+      - type: puppet.relationships.agent_connected_to_server
+        target: external_puppet_server
+        source_interfaces:
+          cloudify.interfaces.relationship_lifecycle:
+            preconfigure:
+              inputs:
+                fabric_env: *MONGODB_HOST_FABRIC
+      - type: cloudify.relationships.contained_in
+        target: mongodb_host
+    interfaces:
+      cloudify.interfaces.lifecycle:
+        create:
+          inputs:
+            fabric_env: *MONGODB_HOST_FABRIC
+        start:
+          inputs:
+            fabric_env: *MONGODB_HOST_FABRIC
+
+  nodejs_host:
+    type: puppet.nodes.Host
+    properties:
+      aws_config: *AWS_CONFIG
+    relationships:
+      - type: cloudify.aws.relationships.instance_connected_to_security_group
+        target: puppet_agents_security_group
+      - type: cloudify.aws.relationships.instance_connected_to_security_group
+        target: nodecellar_security_group
+      - type: cloudify.aws.relationships.instance_connected_to_keypair
+        target: puppet_agent_keypair
+
+  mongodb_host:
+    type: puppet.nodes.Host
+    properties:
+      aws_config: *AWS_CONFIG
+    relationships:
+      - type: cloudify.aws.relationships.instance_connected_to_security_group
+        target: puppet_agents_security_group
+      - type: cloudify.aws.relationships.instance_connected_to_security_group
+        target: mongod_security_group
+      - type: cloudify.aws.relationships.instance_connected_to_keypair
+        target: puppet_agent_keypair
+
+  puppet_agent_keypair:
+    type: cloudify.aws.nodes.KeyPair
+    properties:
+      aws_config: *AWS_CONFIG
+      resource_id: { get_input: puppet_agent_keypair }
+      private_key_path: { get_input: puppet_agent_keypair_path }
+
+  nodecellar_security_group:
+    type: cloudify.aws.nodes.SecurityGroup
+    properties:
+      aws_config: *AWS_CONFIG
+      description: Security Group for Nodecellar VMs
+      rules:
+        - ip_protocol: tcp
+          from_port: 8080
+          to_port: 8080
+          cidr_ip: 0.0.0.0/0
+
+  mongod_security_group:
+    type: cloudify.aws.nodes.SecurityGroup
+    properties:
+      aws_config: *AWS_CONFIG
+      description: Security Group for Mongo VMs
+      rules:
+        - ip_protocol: tcp
+          from_port: 27017
+          to_port: 27017
+          cidr_ip: 0.0.0.0/0
+        - ip_protocol: tcp
+          from_port: 28017
+          to_port: 28017
+          cidr_ip: 0.0.0.0/0
+
+  puppet_agents_security_group:
+    type: cloudify.aws.nodes.SecurityGroup
+    properties:
+      aws_config: *AWS_CONFIG
+      description: Security Group for Fabric and Puppet Agent VMs
+      rules:
+        - ip_protocol: tcp
+          from_port: 22
+          to_port: 22
+          cidr_ip: 0.0.0.0/0
+
+outputs:
+
+  nodecellar_endpoint:
+    value: { get_attribute: [ nodejs_host, public_ip_address ] }
+  endpoint_port:
+    value: 8080
+

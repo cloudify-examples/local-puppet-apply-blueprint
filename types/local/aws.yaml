@@ -1,0 +1,93 @@
+
+node_types:
+
+  puppet.nodes.Agent:
+    derived_from: cloudify.nodes.ApplicationServer
+    properties:
+      node_definition_file:
+        description: >
+          Path to a file that contains the host's node definiton.
+    interfaces:
+      cloudify.interfaces.lifecycle:
+        create:
+          implementation: fabric.fabric_plugin.tasks.run_script
+          inputs:
+            script_path: 
+              default: scripts/puppet/install_agent.sh
+            fabric_env:
+              default: {}
+        start:
+          implementation: fabric.fabric_plugin.tasks.run_script
+          inputs:
+            script_path: 
+              default: scripts/puppet/start_agent.sh
+            fabric_env:
+              default: {}
+
+  puppet.nodes.Host:
+    derived_from: cloudify.aws.nodes.Instance
+    properties:
+      cloudify_agent:
+        default:
+          user: { get_input: agent_ssh_agent_user }
+      install_agent:
+        default: { get_input: install_agent }
+      image_id:
+        default: { get_input: image_id }
+      instance_type:
+        default: { get_input: instance_type }
+
+  puppet.nodes.ExternalServer:
+    derived_from: cloudify.nodes.ApplicationServer
+    properties:
+      hostname:
+        description: >
+          The puppet server's hostname.
+        default: puppet
+      fabric_env:
+        default: {}
+      security_group:
+        description: >
+          The security group that the puppet server accepts connections from.
+        default: ''
+    interfaces:
+      cloudify.interfaces.lifecycle:
+        configure:
+          implementation: fabric.fabric_plugin.tasks.run_script
+          inputs:
+            script_path: 
+              default: scripts/puppet/add_modules.sh
+            fabric_env:
+              default: { get_property: [ SELF, fabric_env ] }
+
+relationships:
+
+  puppet.relationships.agent_connected_to_server:
+    derived_from: cloudify.relationships.connected_to
+    source_interfaces:
+      cloudify.interfaces.relationship_lifecycle:
+        preconfigure:
+          implementation: fabric.fabric_plugin.tasks.run_script
+          inputs:
+            script_path: 
+              default: scripts/puppet/pre_configure_agent.sh
+            fabric_env:
+              default: {}
+    target_interfaces:
+      cloudify.interfaces.relationship_lifecycle:
+        establish:
+          implementation: fabric.fabric_plugin.tasks.run_script
+          inputs:
+            script_path: 
+              default: scripts/puppet/establish_agent.sh
+            fabric_env:
+              default: { get_property: [ TARGET, fabric_env ] }
+        unlink:
+          implementation: fabric.fabric_plugin.tasks.run_script
+          inputs:
+            script_path: 
+              default: scripts/puppet/unlink_agent.sh
+            fabric_env:
+              default: { get_property: [ TARGET, fabric_env ] }
+
+

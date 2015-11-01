@@ -1,0 +1,342 @@
+tosca_definitions_version: cloudify_dsl_1_2
+
+imports:
+  - http://www.getcloudify.org/spec/cloudify/3.2/types.yaml
+  - http://www.getcloudify.org/spec/openstack-plugin/1.2/plugin.yaml
+  - http://www.getcloudify.org/spec/fabric-plugin/1.2/plugin.yaml
+  - types/local/openstack.yaml
+
+inputs:
+
+  ###### Cloudify Stuff
+
+  install_agent:
+    description: >
+      Set to false for a local workflow.
+    default: false
+
+  ###### Puppet Stuff
+
+  ## Puppet Agents
+
+  agent_ssh_agent_user:
+    description: >
+      The SSH user for the Puppet Agents.
+
+  puppet_agent_keypair:
+    description: >
+      The AWS name of the key in the local_agent_key_path.
+
+  puppet_agent_keypair_path:
+    description: >
+      The local path to an ssh key.
+
+  ## Puppet Servers
+
+  server_ssh_agent_user:
+    description: >
+      The SSH user for the Puppet Server.
+
+  puppet_server_keypair_path:
+    description: >
+      The local path to an ssh key.
+
+  puppet_server_ip:
+    description: >
+      The IP of the puppet server.
+
+  puppet_server_security_group:
+    description: >
+      The Puppet Security group.
+
+  ###### Openstack Stuff
+
+  keystone_username:
+    type: string
+
+  keystone_password:
+    type: string
+
+  keystone_tenant_name:
+    type: string
+
+  keystone_url:
+    type: string
+
+  region:
+    type: string
+
+  nova_url:
+    type: string
+
+  neutron_url:
+    type: string
+
+  image_id:
+    description: >
+      The Cloud Provider Image ID.
+
+  flavor_id: 
+    description: >
+      The Cloud Provider instance_type/size/flavor.
+
+  network_name:
+    type: string
+
+  subnet_name:
+    type: string
+
+  application_port_name:
+    type: string
+
+  router_name:
+    type: string
+
+  external_network_name:
+    type: string
+
+dsl_definitions:
+
+  provider_configurations:
+    openstack_config: &OPENSTACK_CONFIG
+      username: { get_input: keystone_username }
+      password: { get_input: keystone_password }
+      tenant_name: { get_input: keystone_tenant_name }
+      auth_url: { get_input: keystone_url }
+      region: { get_input: region }
+      nova_url: { get_input: nova_url }
+      neutron_url: { get_input: neutron_url }
+
+  fabric_envs:
+    puppet_server_fabric_env: &PUPPET_SERVER_FABRIC
+      host_string: { get_input: puppet_server_ip }
+      user: { get_input: server_ssh_agent_user }
+      key_filename: { get_input: puppet_server_keypair_path }
+    nodejs_fabric_env: &NODEJS_HOST_FABRIC
+      user: { get_input: agent_ssh_agent_user }
+      host_string: { get_attribute: [ nodejs_ip, floating_ip_address ] }
+      key_filename: { get_property: [ puppet_agent_keypair, private_key_path ] }
+    mongodb_fabric_env: &MONGODB_HOST_FABRIC
+      user: { get_input: agent_ssh_agent_user }
+      host_string: { get_attribute: [ mongodb_ip, floating_ip_address ] }
+      key_filename: { get_property: [ puppet_agent_keypair, private_key_path ] }
+
+node_templates:
+
+  external_puppet_server:
+    type: puppet.nodes.ExternalServer
+    properties:
+      fabric_env: *PUPPET_SERVER_FABRIC
+      security_group: { get_input: puppet_server_security_group }
+
+  nodejs_agent:
+    type: puppet.nodes.Agent
+    properties:
+      node_definition_file: resources/puppet/nodejs_host.pp
+    relationships:
+      - type: puppet.relationships.agent_connected_to_server
+        target: external_puppet_server
+        source_interfaces:
+          cloudify.interfaces.relationship_lifecycle:
+            preconfigure:
+              inputs:
+                fabric_env: *NODEJS_HOST_FABRIC
+      - type: cloudify.relationships.contained_in
+        target: nodejs_host
+      - type: cloudify.relationships.connected_to
+        target: mongodb_host
+        source_interfaces:
+          cloudify.interfaces.relationship_lifecycle:
+            postconfigure:
+              implementation: fabric.fabric_plugin.tasks.run_script
+              inputs:
+                script_path: scripts/puppet/set-mongo-ip.sh
+                fabric_env: *NODEJS_HOST_FABRIC
+      - type: cloudify.relationships.depends_on
+        target: mongodb_agent
+    interfaces:
+      cloudify.interfaces.lifecycle:
+        create:
+          inputs:
+            fabric_env: *NODEJS_HOST_FABRIC
+        start:
+          inputs:
+            fabric_env: *NODEJS_HOST_FABRIC
+
+  mongodb_agent:
+    type: puppet.nodes.Agent
+    properties:
+      node_definition_file: resources/puppet/mongodb_host.pp
+    relationships:
+      - type: puppet.relationships.agent_connected_to_server
+        target: external_puppet_server
+        source_interfaces:
+          cloudify.interfaces.relationship_lifecycle:
+            preconfigure:
+              inputs:
+                fabric_env: *MONGODB_HOST_FABRIC
+      - type: cloudify.relationships.contained_in
+        target: mongodb_host
+    interfaces:
+      cloudify.interfaces.lifecycle:
+        create:
+          inputs:
+            fabric_env: *MONGODB_HOST_FABRIC
+        start:
+          inputs:
+            fabric_env: *MONGODB_HOST_FABRIC
+
+  nodejs_host:
+    type: puppet.nodes.Host
+    properties:
+      openstack_config: *OPENSTACK_CONFIG
+      management_network_name: { get_property: [ puppet_network, resource_id ] }
+    relationships:
+      - type: cloudify.openstack.server_connected_to_floating_ip
+        target: nodejs_ip
+      - type: cloudify.openstack.server_connected_to_port
+        target: nodejs_port
+      - type: cloudify.openstack.server_connected_to_keypair
+        target: puppet_agent_keypair
+
+  mongodb_host:
+    type: puppet.nodes.Host
+    properties:
+      openstack_config: *OPENSTACK_CONFIG
+      management_network_name: { get_property: [ puppet_network, resource_id ] }
+    relationships:
+      - type: cloudify.openstack.server_connected_to_floating_ip
+        target: mongodb_ip
+      - type: cloudify.openstack.server_connected_to_port
+        target: mongodb_port
+      - type: cloudify.openstack.server_connected_to_keypair
+        target: puppet_agent_keypair
+
+  puppet_network:
+    type: cloudify.openstack.nodes.Network
+    properties:
+      openstack_config: *OPENSTACK_CONFIG
+      use_external_resource: true
+      resource_id: { get_input: network_name }
+
+  puppet_subnet:
+    type: cloudify.openstack.nodes.Subnet
+    properties:
+      openstack_config: *OPENSTACK_CONFIG
+      use_external_resource: true
+      resource_id: { get_input: subnet_name }
+      subnet:
+        ip_version: 4
+        cidr: 10.67.79.0/24
+    relationships:
+      - target: puppet_network
+        type: cloudify.relationships.contained_in
+      - target: router
+        type: cloudify.openstack.subnet_connected_to_router
+
+  nodejs_port:
+    type: cloudify.openstack.nodes.Port
+    properties:
+      openstack_config: *OPENSTACK_CONFIG
+      resource_id: { get_input: application_port_name }
+    relationships:
+      - type: cloudify.relationships.contained_in
+        target: puppet_network
+      - type: cloudify.relationships.depends_on
+        target: puppet_subnet
+      - type: cloudify.openstack.port_connected_to_security_group
+        target: puppet_agents_security_group
+      - type: cloudify.openstack.port_connected_to_security_group
+        target: nodejs_security_group
+
+  mongodb_port:
+    type: cloudify.openstack.nodes.Port
+    properties:
+      openstack_config: *OPENSTACK_CONFIG
+      resource_id: { get_input: application_port_name }
+    relationships:
+      - type: cloudify.relationships.contained_in
+        target: puppet_network
+      - type: cloudify.relationships.depends_on
+        target: puppet_subnet
+      - type: cloudify.openstack.port_connected_to_security_group
+        target: puppet_agents_security_group
+      - type: cloudify.openstack.port_connected_to_security_group
+        target: mongodb_security_group
+
+  router:
+    type: cloudify.openstack.nodes.Router
+    properties:
+      openstack_config: *OPENSTACK_CONFIG
+      use_external_resource: true
+      resource_id: { get_input: router_name }
+    relationships:
+      - target: external_network
+        type: cloudify.relationships.connected_to
+
+  external_network:
+    type: cloudify.openstack.nodes.Network
+    properties:
+      openstack_config: *OPENSTACK_CONFIG
+      use_external_resource: true
+      resource_id: { get_input: external_network_name }
+
+  puppet_agent_keypair:
+    type: cloudify.openstack.nodes.KeyPair
+    properties:
+      openstack_config: *OPENSTACK_CONFIG
+      resource_id: { get_input: puppet_agent_keypair }
+      private_key_path: { get_input: puppet_agent_keypair_path }
+
+  nodejs_security_group:
+    type: cloudify.openstack.nodes.SecurityGroup
+    properties:
+      openstack_config: *OPENSTACK_CONFIG
+      security_group:
+        name: nodejs_host_security_group
+      rules:
+        - port: 8080
+          remote_ip_prefix: 0.0.0.0/0
+
+  mongodb_security_group:
+    type: cloudify.openstack.nodes.SecurityGroup
+    properties:
+      openstack_config: *OPENSTACK_CONFIG
+      security_group:
+        name: mongodb_host_security_group
+      rules:
+        - port: 27017
+          remote_ip_prefix: 0.0.0.0/0
+        - port: 28017
+          remote_ip_prefix: 0.0.0.0/0
+
+  puppet_agents_security_group:
+    type: cloudify.openstack.nodes.SecurityGroup
+    properties:
+      openstack_config: *OPENSTACK_CONFIG
+      security_group:
+        name: puppet_group
+      rules:
+        - port: 22
+          remote_ip_prefix: 0.0.0.0/0
+
+  nodejs_ip:
+    type: cloudify.openstack.nodes.FloatingIP
+    properties:
+      openstack_config: *OPENSTACK_CONFIG
+      floatingip:
+        floating_network_name: { get_input: external_network_name }
+
+  mongodb_ip:
+    type: cloudify.openstack.nodes.FloatingIP
+    properties:
+      openstack_config: *OPENSTACK_CONFIG
+      floatingip:
+        floating_network_name: { get_input: external_network_name }
+
+outputs:
+
+  nodecellar_endpoint:
+    value: { get_attribute: [ nodejs_ip, floating_ip_address ] }
+  endpoint_port:
+    value: 8080

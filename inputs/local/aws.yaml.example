@@ -1,0 +1,21 @@
+
+install_agent: false
+
+# Puppet Stuff
+
+agent_ssh_agent_user: ubuntu
+puppet_agent_keypair: puppet_agent_keypair
+puppet_agent_keypair_path: ~/.ssh/puppet_agent_keypair.pem
+
+server_ssh_agent_user: ubuntu
+puppet_server_keypair_path: ~/.ssh/puppet_keypair.pem
+puppet_server_ip: 
+puppet_server_security_group: 
+
+# AWS STUFF
+
+aws_access_key_id: ''
+aws_secret_access_key: ''
+ec2_region_name: us-east-1
+image_id: 'ami-3cf8b154'
+instance_type: 'm3.medium'
