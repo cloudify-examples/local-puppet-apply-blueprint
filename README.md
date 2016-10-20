@@ -1,3 +1,5 @@
+[![Build Status](https://circleci.com/gh/cloudify-examples/puppet-application-blueprint.svg?style=shield&circle-token=:circle-token)](https://circleci.com/gh/cloudify-examples/puppet-application-blueprint)
+
 # puppet-application-blueprint
 
 This repository contains several blueprints for installing an application using an existing Puppet server.
