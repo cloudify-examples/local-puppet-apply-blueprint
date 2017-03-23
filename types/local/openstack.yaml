@@ -27,16 +27,15 @@ node_types:
   puppet.nodes.Host:
     derived_from: cloudify.openstack.nodes.Server
     properties:
-      cloudify_agent:
+      agent_config:
         default:
           user: { get_input: agent_ssh_agent_user }
-      install_agent:
-        default: { get_input: install_agent }
+          key: { get_input: puppet_agent_keypair_path }
+          install_method: { get_input: install_agent }
       server:
         default:
           image: { get_input: image_id }
           flavor: { get_input: flavor_id }
-
 
   puppet.nodes.ExternalServer:
     derived_from: cloudify.nodes.ApplicationServer
