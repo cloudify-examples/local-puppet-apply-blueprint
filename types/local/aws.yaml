@@ -27,11 +27,11 @@ node_types:
   puppet.nodes.Host:
     derived_from: cloudify.aws.nodes.Instance
     properties:
-      cloudify_agent:
+      agent_config:
         default:
           user: { get_input: agent_ssh_agent_user }
-      install_agent:
-        default: { get_input: install_agent }
+          key: { get_input: puppet_server_keypair_path }
+          install_method: { get_input: install_agent }
       image_id:
         default: { get_input: image_id }
       instance_type:
@@ -89,5 +89,3 @@ relationships:
               default: scripts/puppet/unlink_agent.sh
             fabric_env:
               default: { get_property: [ TARGET, fabric_env ] }
-
-
